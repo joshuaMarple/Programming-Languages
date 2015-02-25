@@ -6,6 +6,13 @@
 
 (define (extend-env vars vals e) (cons (cons vars vals) e))
 
+(define(extend-env-rec vars bound-varss bodies env)
+  (define e(lambda(v) (if(memq v vars)
+           (procedure(list-ref bound-varss(-(length vars)(length(memq v vars))))
+                     (list-ref bodies(-(length vars)(length(memq v vars))))e)
+           (extend-env v))))
+  e)
+
 (define (apply-env e v)
   (if (null? e)
       (eopl:error 'ap-eval "Error in apply-env")
@@ -30,11 +37,14 @@
   '((program (expression) a-program)
     (expression (number) const-exp)
     (expression (symbol) var-exp)
-    (expression ("proc" "(" (separated-list symbol ",") ")" expression) lambda-exp)
+    (expression ("proc" "(" (separated-list symbol ",") ")" expression) proc-exp)
+    (expression ("dy-proc" "(" (separated-list symbol ",") ")" expression) dy-proc-exp)
     (expression ("(" expression (arbno expression) ")" ) app-exp)
     (expression (primitive "("(separated-list expression ",") ")") prim-app-exp)
     (expression ("if" expression "then" expression "else" expression) if-exp)
     (expression ("let" symbol "=" expression "in" expression) let-exp)
+    (expression ("letrec"
+                (arbno symbol "(" (separated-list symbol ",") ")" "=" expression )"in" expression) letrec-exp)
     (primitive ("add1") add1-prim)
     (primitive ("minus") minus-prim)
     (primitive ("+") plus-prim)
@@ -59,18 +69,30 @@
 (sllgen:make-define-datatypes scanner-spec grammar)
 (define string-parser (sllgen:make-string-parser scanner-spec grammar))
 
+(define(procedure ids body e)
+
+  (lambda(dy-e)
+
+   (lambda vals(value-of body(extend-env ids vals e)))))
+
 (define(value-of x e)
   (cases expression x
-    (lambda-exp (id body)
-                (lambda (val) (value-of body (extend-env id val e))))
+    #|(lambda-exp (id body)
+                (lambda (val) (value-of body (extend-env id val e))))|#
     (app-exp (rator rand)
              ((value-of rator e) (map (lambda(n) (value-of n e)) rand )))
     (const-exp (n) n)
     (var-exp (id) (apply-env e id))
+    (proc-exp(ids body)(procedure ids body e))
+    (dy-proc-exp (ids body)(dy-procedure ids body e))
+    ;(call-exp(rator rands)(apply((value-of rator e)e)(value-of-list rands e)))
+    ;(app-exp (rator rands)(apply((value-of rator e)e)(value-of-list rands e)))
     (prim-app-exp (prim rand)
                   (apply (value-of-prim prim) (map (lambda(n) (value-of n e)) rand)))
     (if-exp (w y z) (if (value-of w e) (value-of y e) (value-of z e)))
     (let-exp (symbol exp stuff) (value-of stuff (extend-env symbol (value-of exp e) e)))
+    (letrec-exp(fid id body1 body)
+             (value-of body(extend-env-rec fid id body1 e)))
     (else (eopl:error 'ap-eval "Error in value-of"))))
 
 (define (minus n) (- n))
@@ -97,13 +119,45 @@
   (cases program p (a-program (x) (value-of x 
                                             init-env))))
 
+(define(dy-procedure ids body static-e)
+  (lambda(dy-e)
+    (lambda vals (value-of body(extend-env ids vals dy-e)))))
+
+
 (define (run s) (value-of-program (string-parser s)))
 
 ;; examples
 (run "let x = 1 in +(x, 1)")
-;(run "let Y=proc(ff) (proc(h) (h h) proc(g) (ff proc(x) ((g g) x)) )
-;in 
-;let fact = (Y proc(f) proc(n) if zero?(n)
-;then 1
-;else *(n, (f-(n,1))))
-;in (fact 5)")
+(run "let Y=proc(ff) (proc(h) (h h) proc(g) (ff proc(x) ((g g) x)) )
+in 
+let fact = (Y proc(f) proc(n) if zero?(n)
+then 1
+else *(n, (f-(n,1))))
+in (fact 5)")
+
+
+(run
+ "letrec fac(x) = if zero?(x) then 1 else *(x,(fac -(x,1)))
+               in (fac 5)")
+
+
+
+#|(run
+ "letrec fac(x) = x
+               in (fac 5)")
+
+
+
+(run "let fac = proc(g,n) if zero?(n)
+                     then 1
+                     else *(n,(g g -(n,1)))
+               in (fac fac 5)")
+
+(run "let Y = proc(ff)(proc(h)(h h)
+                       proc(g)(ff proc(x)((g g) x)))
+              in
+                  let fac = (Y proc(f) proc(n) if zero?(n)
+                                               then 1
+                                               else *(n,(f -(n,1))))
+                       in (fac 5)"
+) |#
